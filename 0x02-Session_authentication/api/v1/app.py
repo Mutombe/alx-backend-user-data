@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Route module for the API
+Entry module for the API
 """
 from os import getenv
 from api.v1.views import app_views
@@ -12,48 +12,24 @@ import os
 app = Flask(__name__)
 app.register_blueprint(app_views)
 CORS(app, resources={r"/api/v1/*": {"origins": "*"}})
+
 auth = None
-
-if "AUTH_TYPE" in os.environ:
-    auth_type = os.environ["AUTH_TYPE"]
-    if auth_type == "session_auth":
-        from api.v1.auth.session_auth import SessionAuth
-        auth = SessionAuth()
-    else:
-        from api.v1.auth.auth import Auth
-        auth = Auth()
-
-
-@app.before_request
-def before_request():
-    """executed before the requests
-    """
-    if auth is None:
-        return
-
-    request.current_user = auth.current_user(request)
-
-    excluded_paths = ['/api/v1/status/', '/api/v1/unauthorized/',
-                      '/api/v1/forbidden/', "/api/v1/auth_session/login/"]
-
-    the_path = request.path
-    if not the_path.endswith("/"):
-        the_path = the_path + "/"
-
-    if the_path in excluded_paths:
-        return
-
-    if auth.require_auth(request, excluded_paths):
-        if auth.authorization_header(request) is None:
-            abort(401)
-
-    if auth.current_user(request) is None:
-        abort(403)
-
-    authorization = auth.authorization_header(request)
-    session = auth.session_cookie(request)
-    if authorization is None and session is None:
-        abort(401)
+auth = os.environ.get('AUTH_TYPE')
+if auth == 'auth':
+    from api.v1.auth.auth import Auth
+    auth = Auth()
+elif auth == 'basic_auth':
+    from api.v1.auth.basic_auth import BasicAuth
+    auth = BasicAuth()
+elif auth == 'session_auth':
+    from api.v1.auth.session_auth import SessionAuth
+    auth = SessionAuth()
+elif auth == 'session_exp_auth':
+    from api.v1.auth.session_exp_auth import SessionExpAuth
+    auth = SessionExpAuth()
+elif auth == 'session_db_auth':
+    from api.v1.auth.session_db_auth import SessionDBAuth
+    auth = SessionDBAuth()
 
 
 @app.errorhandler(404)
@@ -65,16 +41,35 @@ def not_found(error) -> str:
 
 @app.errorhandler(401)
 def unauthorized(error) -> str:
-    """request unauthorised
-    """
+    """Unauthorized handler"""
     return jsonify({"error": "Unauthorized"}), 401
 
 
 @app.errorhandler(403)
-def forbidden_access(error) -> str:
-    """not allowed access to a resource
-    """
+def forbidden(error) -> str:
+    """Forbidden handler"""
     return jsonify({"error": "Forbidden"}), 403
+
+
+@app.before_request
+def auth_req():
+    """check authorization for each request"""
+    if not auth:
+        return
+    path = request.path
+    exclud = ['/api/v1/status/', '/api/v1/unauthorized/', '/api/v1/forbidden/',
+              '/api/v1/auth_session/login/']
+    auth_ = auth.require_auth(path, exclud)
+    if not auth_:
+        return
+    auth_val = auth.authorization_header(request)
+    cookie = auth.session_cookie(request)
+    if not auth_val and not cookie:
+        abort(401)
+    current_user = auth.current_user(request)
+    if not current_user:
+        abort(403)
+    request.current_user = current_user
 
 
 if __name__ == "__main__":
